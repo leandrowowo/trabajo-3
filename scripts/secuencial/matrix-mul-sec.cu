@@ -177,12 +177,6 @@ void printData(float *A, float *B, float *C, int f, int c1, int c2, int mode)
         printMatrix(C, f, c2);
         printf("\n--------------------------\n");
     }
-    else
-    {
-        printf("\n--------------------------\n");
-        printf("Cantidad de nodos: (agregar a parámetros de la función cuando se implemente con MPICH)");
-        printf("\n--------------------------\n");
-    }
 }
 
 
@@ -192,6 +186,7 @@ int main(int argc, char **argv)
     float *d_A, *d_B, *d_C; // Matrices A, B y C de la GPU
 
     int f, c1, c2; // Dimensiones de las matrices
+    unsigned int size_A, size_B, size_C; // Tamaño total (en bytes) de las matrices A, B y C
 
     int printMode, paralMode; // Modo de impresión en pantalla y modo de paralelización, respectivamente
     int n_task; // Cantidad de tareas a realizar;
@@ -227,11 +222,11 @@ int main(int argc, char **argv)
         scanf("%d", &n_task); // Lee la cantidad de tareas a realizar
         printf("Cantidad de tareas a asignar: %d\n\n", n_task);        
 
-        CPU_start = clock();
-        Wall_start = time(NULL);
-
         if(paralMode == HOST) // Ejecución de la versión secuencial de la multiplicación de matrices
         {
+            CPU_start = clock();
+            Wall_start = time(NULL);
+
             for(i = 0; i < n_task; i = i + 1)
             {
                 scanf("%d %d %d", &f, &c1, &c2);  // Lectura de dimesiones
@@ -249,52 +244,62 @@ int main(int argc, char **argv)
                 free(h_B);
                 free(h_C);
             }
+
+            Wall_finish = time(NULL);
+            CPU_finish = clock();
         }
         else // Ejecución de versión pararlela usando CUDA
         {
+            CPU_start = clock();
+            Wall_start = time(NULL);
+
             for(i = 0; i < n_task; i = i + 1)
             {
                 scanf("%d %d %d", &f, &c1, &c2);  // Lectura de dimesiones
                 genData(&h_A, &h_B, f, c1, c2);  // Generación de matrices
 
+                size_A = f * c1 * sizeof(float);
+                size_B = c1 * c2 * sizeof(float);
+                size_C = f * c2 * sizeof(float);
+
                 // Asignación de memoria a matriz C de CPU
-                h_C = (float *) malloc((f * c2) * sizeof(float));
+                h_C = (float *) malloc(size_C);
 
                 // Asignación de memoria en la GPU
-                cudaMalloc((void **) &d_A, f * c1);
-                cudaMalloc((void **) &d_B, c1 * c2);
-                cudaMalloc((void **) &d_C, f * c2);
+                cudaMalloc((void **) &d_A, size_A);
+                cudaMalloc((void **) &d_B, size_B);
+                cudaMalloc((void **) &d_C, size_C);
 
                 // Copia de memoria desde CPU a GPU
-                cudaMemcpy(d_A, h_A, f * c1, cudaMemcpyHostToDevice);
-                cudaMemcpy(d_B, h_B, c1 * c2, cudaMemcpyHostToDevice);
+                cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice);
+                cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice);
 
                 if(paralMode == MBOT) // Ejecución modo MBOT
                 {
                     block = dim3(1,1);
                     grid = dim3(c2,f);
-                    matrixMultDev_MBOT<<< grid, block >>>(h_A, h_B, h_C, f, c1, c2);
+                    matrixMultDev_MBOT<<< grid, block >>>(d_A, d_B, d_C, f, c1, c2);
                 }
                 else if(paralMode == OBMT) // Ejecución modo OBMT
                 {
                     block = dim3(c2,f);
                     grid = dim3(1,1);
-                    matrixMultDev_OBMT<<< grid, block >>>(h_A, h_B, h_C, f, c1, c2);
+                    matrixMultDev_OBMT<<< grid, block >>>(d_A, d_B, d_C, f, c1, c2);
                 }
                 else if(paralMode == MBMT) // Ejecución modo MBMT
                 {
                     block = dim3(32, 32);
                     grid = dim3((c2 + block.x - 1) / block.x, (f + block.y - 1) / block.y);
-                    matrixMultDev_MBMT<<< grid, block >>>(h_A, h_B, h_C, f, c1, c2);
+                    matrixMultDev_MBMT<<< grid, block >>>(d_A, d_B, d_C, f, c1, c2);
                 }
 
                 // Sincronización entre CPU y GPU
                 cudaDeviceSynchronize();
 
                 // Copia de memoria desde GPU a CPU
-                cudaMemcpy(h_A, d_A, f * c1, cudaMemcpyDeviceToHost);
-                cudaMemcpy(h_B, d_B, c1 * c2, cudaMemcpyDeviceToHost);
-                cudaMemcpy(h_C, d_C, f * c2, cudaMemcpyDeviceToHost);
+                cudaMemcpy(h_A, d_A, size_A, cudaMemcpyDeviceToHost);
+                cudaMemcpy(h_B, d_B, size_B, cudaMemcpyDeviceToHost);
+                cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost);
 
                 printData(h_A, h_B, h_C, f, c1, c2, printMode);
 
@@ -308,13 +313,20 @@ int main(int argc, char **argv)
                 free(h_B);
                 free(h_C);
             }
-        }
 
-        Wall_finish = time(NULL);
-        CPU_finish = clock();
+            Wall_finish = time(NULL);
+            CPU_finish = clock();
+        }
 
         CPU_time = (float)((CPU_finish - CPU_start)/CLOCKS_PER_SEC);
         Wall_time = (double)(Wall_finish - Wall_start);
+
+        if(printMode == SILENT)
+        {
+            printf("\n--------------------------\n");
+            printf("Cantidad de nodos: (agregar a parámetros de la función cuando se implemente con MPICH)");
+            printf("\n--------------------------\n");
+        }
 
         printf("\n--------------------------\n");
         printf("Tiempo de CPU (CPU-time): %f\n", CPU_time);
